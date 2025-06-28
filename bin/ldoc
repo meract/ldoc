@@ -1,0 +1,437 @@
+#!/usr/bin/env php
+<?php
+
+require_once __DIR__ . '/../vendor/autoload.php';
+
+use phpDocumentor\Reflection\DocBlockFactory;
+use phpDocumentor\Reflection\File\LocalFile;
+use phpDocumentor\Reflection\Php\ProjectFactory;
+use phpDocumentor\Reflection\Types\ContextFactory;
+use Symfony\Component\Console\Helper\ProgressBar;
+use Symfony\Component\Console\Output\ConsoleOutput;
+
+class Ldoc {
+    private const VERSION = '1.3.0';
+    private $config = [
+        'input' => './src',
+        'output' => './docs',
+        'exclude' => ['vendor', 'tests', 'node_modules'],
+        'title' => 'Project Documentation',
+        'theme' => 'github-dark'
+    ];
+
+    private $docBlockFactory;
+    private $contextFactory;
+    private $projectFactory;
+    private $consoleOutput;
+
+    public function __construct() {
+        $this->docBlockFactory = DocBlockFactory::createInstance();
+        $this->contextFactory = new ContextFactory();
+        $this->projectFactory = ProjectFactory::createInstance();
+        $this->consoleOutput = new ConsoleOutput();
+    }
+
+    public function run(array $argv): void {
+        $this->parseOptions($argv);
+        $this->showBanner();
+        
+        $project = $this->parseProject();
+        $this->generateMarkdown($project);
+        
+        $this->success("\nDocumentation generated in {$this->config['output']}");
+        $this->consoleOutput->writeln("✨ <fg=green>Done!</>");
+    }
+
+    private function parseOptions(array $argv): void {
+        $options = getopt('i:o:t:e:hv', ['input:', 'output:', 'title:', 'exclude:', 'help', 'version']);
+
+        if (isset($options['h']) || isset($options['help'])) {
+            $this->showHelp();
+            exit(0);
+        }
+
+        if (isset($options['v']) || isset($options['version'])) {
+			$version = self::VERSION;
+            $this->consoleOutput->writeln("Ldoc v{$version}");
+            exit(0);
+        }
+
+        $this->config['input'] = realpath($options['i'] ?? $options['input'] ?? $this->config['input']);
+        $this->config['output'] = $options['o'] ?? $options['output'] ?? $this->config['output'];
+        $this->config['title'] = $options['t'] ?? $options['title'] ?? $this->config['title'];
+
+        if (isset($options['e']) || isset($options['exclude'])) {
+            $exclude = $options['e'] ?? $options['exclude'];
+            $this->config['exclude'] = is_array($exclude) ? $exclude : explode(',', $exclude);
+        }
+
+        if (!is_dir($this->config['input'])) {
+            $this->error("Input directory does not exist: {$this->config['input']}");
+        }
+    }
+
+    private function showHelp(): void {
+		$version = self::VERSION;
+        $help = <<<HELP
+<fg=yellow>Ldoc v{$version} - Modern PHP Documentation Generator</>
+
+<fg=green>Usage:</>
+  ldoc [options]
+
+<fg=green>Options:</>
+  -i, --input=<dir>    Input directory (default: ./)
+  -o, --output=<dir>   Output directory (default: ./docs)
+  -t, --title=<title>  Documentation title
+  -e, --exclude=<dirs> Excluded directories (comma separated)
+  -h, --help           Display this help message
+  -v, --version        Display version information
+
+<fg=green>Examples:</>
+  <fg=cyan>ldoc -i src -o docs/api --title="My API"</>
+  <fg=cyan>ldoc --exclude=vendor,tests,node_modules</>
+
+HELP;
+        $this->consoleOutput->writeln($help);
+    }
+
+    private function showBanner(): void {
+		$version = self::VERSION;
+        $banner = <<<BANNER
+<fg=magenta>
+                   _____          ___           ___     
+                  /  /::\        /  /\         /  /\    
+                 /  /:/\:\      /  /::\       /  /:/    
+  ___     ___   /  /:/  \:\    /  /:/\:\     /  /:/     
+ /__/\   /  /\ /__/:/ \__\:|  /  /:/  \:\   /  /:/  ___ 
+ \  \:\ /  /:/ \  \:\ /  /:/ /__/:/ \__\:\ /__/:/  /  /\
+  \  \:\  /:/   \  \:\  /:/  \  \:\ /  /:/ \  \:\ /  /:/
+   \  \:\/:/     \  \:\/:/    \  \:\  /:/   \  \:\  /:/ 
+    \  \::/       \  \::/      \  \:\/:/     \  \:\/:/  
+     \__\/         \__\/        \  \::/       \  \::/   
+                                 \__\/         \__\/    
+</>
+<fg=yellow>Modern PHP Documentation Generator v{$version}</>
+<fg=gray>==========================================</>
+
+BANNER;
+        $this->consoleOutput->writeln($banner);
+    }
+
+private function scanFiles(): array {
+    $this->consoleOutput->writeln("🔍 <fg=blue>Scanning directory: {$this->config['input']}</>");
+
+    $directory = new RecursiveDirectoryIterator(
+        $this->config['input'],
+        RecursiveDirectoryIterator::SKIP_DOTS
+    );
+
+    $filter = new RecursiveCallbackFilterIterator($directory, function($current) {
+        // Skip hidden files/directories
+        if (substr($current->getFilename(), 0, 1) === '.') {
+            return false;
+        }
+
+        // Filter excluded directories
+        if ($current->isDir()) {
+            return !in_array($current->getFilename(), $this->config['exclude']);
+        }
+
+        // Only include PHP files
+        return $current->isFile() && $current->getExtension() === 'php';
+    });
+
+    $files = [];
+    $iterator = new RecursiveIteratorIterator($filter);
+
+    $progress = new ProgressBar($this->consoleOutput, iterator_count($iterator));
+    $progress->setFormat(' %current% files [%bar%] %percent:3s%%');
+    $progress->start();
+
+    foreach ($iterator as $file) {
+        $files[] = $file->getRealPath();
+        $progress->advance();
+    }
+
+    $progress->finish();
+    $this->consoleOutput->writeln("\n✅ <fg=green>Found " . count($files) . " PHP files</>");
+
+    return $files;
+}
+
+    private function parseProject() {
+        $files = $this->scanFiles();
+        if (empty($files)) {
+            $this->error("No PHP files found in {$this->config['input']}");
+        }
+
+        $fileObjects = [];
+        foreach ($files as $file) {
+            $fileObjects[] = new LocalFile($file);
+        }
+
+        $this->consoleOutput->writeln("📦 <fg=blue>Parsing project structure...</>");
+        return $this->projectFactory->create('Ldoc Project', $fileObjects);
+    }
+
+    private function generateMarkdown($project): void {
+        $this->prepareOutputDirectory();
+
+        $this->consoleOutput->writeln("📝 <fg=blue>Generating documentation...</>");
+
+        $this->generateIndex($project);
+        $this->generateElements($project, 'Classes', 'getClasses', 'classes');
+        $this->generateElements($project, 'Interfaces', 'getInterfaces', 'interfaces');
+        $this->generateElements($project, 'Traits', 'getTraits', 'traits');
+        $this->generateFunctions($project);
+    }
+
+    private function prepareOutputDirectory(): void {
+        if (!is_dir($this->config['output'])) {
+            mkdir($this->config['output'], 0777, true);
+        }
+
+        $subdirs = ['classes', 'interfaces', 'traits'];
+        foreach ($subdirs as $dir) {
+            $path = "{$this->config['output']}/$dir";
+            if (!is_dir($path)) {
+                mkdir($path, 0777, true);
+            }
+        }
+    }
+
+    private function generateIndex($project): void {
+        $content = "# {$this->config['title']}\n\n";
+        $content .= "## Table of Contents\n";
+
+        $elements = [
+            'Classes' => [],
+            'Interfaces' => [],
+            'Traits' => [],
+            'Functions' => []
+        ];
+
+        foreach ($project->getFiles() as $file) {
+            $elements['Classes'] = array_merge($elements['Classes'], $file->getClasses());
+            $elements['Interfaces'] = array_merge($elements['Interfaces'], $file->getInterfaces());
+            $elements['Traits'] = array_merge($elements['Traits'], $file->getTraits());
+            $elements['Functions'] = array_merge($elements['Functions'], $file->getFunctions());
+        }
+
+        foreach ($elements as $type => $items) {
+            if (!empty($items)) {
+                $content .= "\n### $type\n";
+                foreach ($items as $item) {
+                    $link = strtolower($type) . '/' . $item->getName() . '.md';
+                    $content .= "- [{$item->getFqsen()}]($link)\n";
+                }
+            }
+        }
+
+        file_put_contents("{$this->config['output']}/README.md", $content);
+    }
+
+    private function generateElements($project, string $type, string $method, string $dir): void {
+        $items = [];
+        foreach ($project->getFiles() as $file) {
+            $items = array_merge($items, $file->$method());
+        }
+
+        if (empty($items)) return;
+
+        $progress = new ProgressBar($this->consoleOutput, count($items));
+        $progress->setFormat(" %message% \n %current%/%max% [%bar%] %percent:3s%%");
+        $progress->setMessage("<fg=blue>Generating $type...</>");
+
+        foreach ($progress->iterate($items) as $item) {
+            $content = "# {$item->getFqsen()}\n\n";
+
+            if ($item->getDocBlock()) {
+                $content .= $this->formatDocBlock($item->getDocBlock());
+            }
+
+            // Properties
+            if (method_exists($item, 'getProperties') && !empty($item->getProperties())) {
+                $content .= "\n## Properties\n";
+                foreach ($item->getProperties() as $property) {
+                    $content .= $this->formatProperty($property);
+                }
+            }
+
+            // Methods
+            if (method_exists($item, 'getMethods') && !empty($item->getMethods())) {
+                $content .= "\n## Methods\n";
+                foreach ($item->getMethods() as $method) {
+                    $content .= $this->formatMethod($method);
+                }
+            }
+
+            $outputPath = "{$this->config['output']}/$dir/{$item->getName()}.md";
+            file_put_contents($outputPath, $content);
+        }
+
+        $this->consoleOutput->writeln("");
+    }
+
+    private function generateFunctions($project): void {
+        $functions = [];
+        foreach ($project->getFiles() as $file) {
+            $functions = array_merge($functions, $file->getFunctions());
+        }
+
+        if (empty($functions)) return;
+
+        $content = "# Global Functions\n\n";
+        foreach ($functions as $function) {
+            $content .= $this->formatFunction($function);
+        }
+
+        file_put_contents("{$this->config['output']}/functions.md", $content);
+    }
+
+    private function formatFunction($function): string {
+        $content = "\n## {$function->getName()}()\n\n";
+        $content .= "```php\n{$this->getFunctionSignature($function)}\n```\n\n";
+
+        if ($function->getDocBlock()) {
+            $content .= $this->formatDocBlock($function->getDocBlock());
+        }
+
+        return $content;
+    }
+
+    private function getFunctionSignature($function): string {
+        $params = [];
+        foreach ($function->getArguments() as $param) {
+            $type = $param->getType() ?: 'mixed';
+            $paramStr = "{$type} \${$param->getName()}";
+            
+            if ($param->getDefault()) {
+                $paramStr .= " = {$param->getDefault()}";
+            }
+            
+            $params[] = $paramStr;
+        }
+
+        $returnType = $function->getReturnType() ?: 'void';
+        return "function {$function->getName()}(" . implode(', ', $params) . "): {$returnType}";
+    }
+
+    private function formatMethod($method): string {
+        $content = "\n### {$method->getName()}()\n\n";
+        $content .= "```php\n{$this->getMethodSignature($method)}\n```\n\n";
+
+        if ($method->getDocBlock()) {
+            $content .= $this->formatDocBlock($method->getDocBlock());
+        }
+
+        return $content;
+    }
+
+    private function getMethodSignature($method): string {
+        $params = [];
+        foreach ($method->getArguments() as $param) {
+            $type = $param->getType() ?: 'mixed';
+            $paramStr = "{$type} \${$param->getName()}";
+            
+            if ($param->getDefault()) {
+                $paramStr .= " = {$param->getDefault()}";
+            }
+            
+            $params[] = $paramStr;
+        }
+
+        $returnType = $method->getReturnType() ?: 'void';
+        return "function {$method->getName()}(" . implode(', ', $params) . "): {$returnType}";
+    }
+
+    private function formatProperty($property): string {
+        $content = "\n#### \${$property->getName()}\n\n";
+        $content .= "```php\n{$property->getVisibility()} ";
+
+        if ($property->isStatic()) {
+            $content .= "static ";
+        }
+
+        $content .= "{$property->getType()} \${$property->getName()}";
+        
+        if ($property->getDefault()) {
+            $content .= " = {$property->getDefault()}";
+        }
+
+        $content .= "\n```\n\n";
+
+        if ($property->getDocBlock()) {
+            $content .= $this->formatDocBlock($property->getDocBlock());
+        }
+
+        return $content;
+    }
+
+    private function formatDocBlock($docBlock): string {
+        $content = '';
+        
+        if ($docBlock->getSummary()) {
+            $content .= "{$docBlock->getSummary()}\n\n";
+        }
+
+        if ($docBlock->getDescription()) {
+            $content .= "{$docBlock->getDescription()->render()}\n\n";
+        }
+
+        // Tags
+        foreach ($docBlock->getTags() as $tag) {
+            $content .= $this->formatTag($tag);
+        }
+
+        return $content;
+    }
+
+    private function formatTag($tag): string {
+        $tagName = $tag->getName();
+        $content = "#### " . ucfirst($tagName) . "\n";
+
+        switch ($tagName) {
+            case 'param':
+                $content .= "- `{$tag->getVariableName()}` ({$tag->getType()}) - {$tag->getDescription()}\n";
+                break;
+                
+            case 'return':
+                $content .= "{$tag->getType()} - {$tag->getDescription()}\n";
+                break;
+                
+            case 'throws':
+            case 'see':
+                $content .= "- {$tag->getDescription()}\n";
+                break;
+                
+            case 'example':
+                $content .= "```php\n{$tag->getDescription()}\n```\n";
+                break;
+                
+            case 'deprecated':
+                $content .= "⚠️ {$tag->getDescription()}\n";
+                break;
+                
+            case 'since':
+                $content .= "📅 {$tag->getDescription()}\n";
+                break;
+                
+            default:
+                $content .= "- {$tag->render()}\n";
+        }
+
+        return $content . "\n";
+    }
+
+    private function error(string $message): void {
+        $this->consoleOutput->writeln("<error>Error: {$message}</error>");
+        exit(1);
+    }
+
+    private function success(string $message): void {
+        $this->consoleOutput->writeln("<fg=green>{$message}</>");
+    }
+}
+
+(new Ldoc())->run($argv);

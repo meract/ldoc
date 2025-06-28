@@ -1,0 +1,26 @@
+{
+    "name": "meract/ldoc",
+    "description": "A simple PHP documentation generator",
+    "type": "library",
+    "license": "MIT",
+    "authors": [
+        {
+            "name": "lumetas",
+            "email": "lumetas506@gmail.com",
+            "role": "Developer"
+        }
+    ],
+    "require": {
+        "php": "^8.1",
+        "symfony/console": "^7.3",
+        "phpdocumentor/reflection": "^6.3"
+    },
+    "autoload": {
+        "psr-4": {
+            "Ldoc\\": "src/"
+        }
+    },
+    "bin": ["bin/ldoc"],
+    "minimum-stability": "stable",
+    "prefer-stable": true
+}
