@@ -2,7 +2,7 @@
 
 // Проверка phar.readonly
 if (ini_get('phar.readonly')) {
-    die("Запустите с параметром: php -d phar.readonly=0 build-phar.php\n");
+    die("Запустите с параметром: php -d phar.readonly=0 build.php\n");
 }
 
 $pharFile = 'ldoc.phar';
