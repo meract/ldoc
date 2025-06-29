@@ -18,3 +18,11 @@
 ```
 ./ldoc --input=src --output=docs --title="My Project"
 ```
+## Сборка
+```
+git clone https://github.com/meract/ldoc.git
+cd ldoc
+composer install
+php build.php
+```
+У вас должны быть включены и настроены расширения для phar
