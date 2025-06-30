@@ -222,8 +222,12 @@ private function scanFiles(): array {
             if (!empty($items)) {
                 $content .= "\n### $type\n";
                 foreach ($items as $item) {
-                    $link = strtolower($type) . '/' . $item->getName() . '.md';
-                    $content .= "- [{$item->getFqsen()}]($link)\n";
+					if ($type !== "Functions") {
+						$link = strtolower($type) . '/' . $item->getName() . '.md';
+					} else {
+						$link = "functions.md";
+					}
+					$content .= "- [{$item->getFqsen()}]($link)\n";
                 }
             }
         }
